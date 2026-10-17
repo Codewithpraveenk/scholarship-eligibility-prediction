@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 ROOT = Path(__file__).resolve().parent
 DB = Path(os.environ.get('DATABASE_PATH', 'data/scholarpath.db'))
 PROD = os.environ.get('APP_ENV') == 'production'
+if PROD and not os.environ.get('APP_ORIGIN', '').startswith('https://'):
+    raise RuntimeError('Production requires APP_ORIGIN set to the public HTTPS origin')
 logger = logging.getLogger('scholarpath')
 
 @contextmanager
@@ -76,7 +78,11 @@ app = FastAPI(title='ScholarPath API', version='1.0.0', docs_url=None if PROD el
 @app.middleware('http')
 async def security(request: Request, call_next):
     if request.method in ('POST','PUT','DELETE','PATCH'):
-        if int(request.headers.get('content-length', '0')) > 32768:
+        try:
+            length = int(request.headers.get('content-length', '0'))
+        except ValueError:
+            return Response('Invalid content length', status_code=400)
+        if length > 32768:
             return Response('Request too large', status_code=413)
         origin = request.headers.get('origin')
         allowed = os.environ.get('APP_ORIGIN', str(request.base_url).rstrip('/'))

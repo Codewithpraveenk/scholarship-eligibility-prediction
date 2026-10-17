@@ -71,6 +71,11 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(headers['X-Content-Type-Options'],'nosniff')
         self.assertIn("script-src 'self'",headers['Content-Security-Policy'])
 
+    def test_00_unpublished_policies_are_not_assessed(self):
+        self.assertEqual(self.request('/api/scholarships')[1],[])
+        self.login()
+        self.assertEqual(self.request('/api/assessments','POST',{'marks':95,'annual_income':100000,'level':'undergraduate'})[0],409)
+
     def test_02_home_and_assets(self):
         for path,content in [('/','ScholarPath'),('/static/app.js','loadCatalog'),('/static/style.css',':root')]:
             status,body,_=self.request(path)
@@ -161,6 +166,24 @@ class ApplicationTests(unittest.TestCase):
         for _ in range(10):
             self.assertEqual(self.request('/api/auth/login','POST',body)[0],401)
         self.assertEqual(self.request('/api/auth/login','POST',body)[0],429)
+
+    def test_15_expired_policy_and_study_levels(self):
+        self.login(admin=True)
+        body=self.policy();body['deadline']='2020-01-01';body['level']='any'
+        _,created,_=self.request('/api/admin/scholarships','POST',body)
+        _,result,_=self.request('/api/assessments','POST',{'marks':100,'annual_income':0,'level':'school'})
+        expired=next(p for p in result['results'] if p['id']==created['id'])
+        self.assertFalse(expired['eligible'])
+        self.assertTrue(expired['checks'][2]['passed'])
+        self.assertFalse(expired['checks'][3]['passed'])
+
+    def test_16_duplicate_registration_and_invalid_policy(self):
+        user=self.login()
+        self.assertEqual(self.request('/api/auth/register','POST',{'email':user['email'],'password':'Student-test-password'})[0],409)
+        self.request('/api/logout','POST',{})
+        self.login(admin=True)
+        body=self.policy();body['deadline']='not-a-date'
+        self.assertEqual(self.request('/api/admin/scholarships','POST',body)[0],422)
 
 if __name__=='__main__':
     unittest.main()
