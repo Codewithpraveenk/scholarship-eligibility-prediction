@@ -21,7 +21,7 @@ class ApplicationTests(unittest.TestCase):
             sock.bind(('127.0.0.1',0))
             cls.port = sock.getsockname()[1]
         cls.base = f'http://127.0.0.1:{cls.port}'
-        env = {**os.environ,'DATABASE_PATH':str(Path(cls.temp.name)/'test.db'),'ADMIN_EMAIL':'admin@example.org','ADMIN_PASSWORD':'Admin-test-password-2026','APP_ENV':'test','APP_ORIGIN':cls.base}
+        env = {**os.environ,'DATABASE_URL':os.environ.get('TEST_DATABASE_URL',''),'DATABASE_PATH':str(Path(cls.temp.name)/'test.db'),'ADMIN_EMAIL':'admin@example.org','ADMIN_PASSWORD':'Admin-test-password-2026','APP_ENV':'test','APP_ORIGIN':cls.base}
         cls.process = subprocess.Popen([sys.executable,'-m','uvicorn','app.main:app','--host','127.0.0.1','--port',str(cls.port)],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         for _ in range(100):
             try:

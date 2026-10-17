@@ -5,9 +5,7 @@ import json
 import logging
 import os
 import secrets
-import sqlite3
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -15,39 +13,25 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, field_validator
+from app.database import database
 
 ROOT = Path(__file__).resolve().parent
-DB = Path(os.environ.get('DATABASE_PATH', 'data/scholarpath.db'))
 PROD = os.environ.get('APP_ENV') == 'production'
 if PROD and not os.environ.get('APP_ORIGIN', '').startswith('https://'):
     raise RuntimeError('Production requires APP_ORIGIN set to the public HTTPS origin')
 logger = logging.getLogger('scholarpath')
 
-@contextmanager
-def database():
-    DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB, timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA foreign_keys=ON')
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
 def initialize():
     with database() as db:
-        db.execute('PRAGMA journal_mode=WAL')
+        if not db.postgres:
+            db.execute('PRAGMA journal_mode=WAL')
         db.executescript('''
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'student');
-        CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, expires REAL NOT NULL, csrf TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, expires DOUBLE PRECISION NOT NULL, csrf TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS scholarships(id INTEGER PRIMARY KEY, title TEXT NOT NULL, provider TEXT NOT NULL, amount INTEGER NOT NULL, min_marks REAL NOT NULL, max_income INTEGER NOT NULL, level TEXT NOT NULL, deadline TEXT NOT NULL, source_url TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS assessments(id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, profile TEXT NOT NULL, results TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, user_id INTEGER, action TEXT NOT NULL, details TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS attempts(key TEXT NOT NULL, created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS attempts(key TEXT NOT NULL, created DOUBLE PRECISION NOT NULL);
         CREATE INDEX IF NOT EXISTS attempts_key ON attempts(key, created);
         ''')
         # Illustrative policies are deliberately unpublished until an administrator verifies them.
@@ -61,7 +45,7 @@ def initialize():
         if email and password:
             if len(password) < 12:
                 raise RuntimeError('ADMIN_PASSWORD must have at least 12 characters')
-            db.execute('INSERT OR IGNORE INTO users(email,name,password,role) VALUES(?,?,?,?)', (email,'Administrator',hash_password(password),'admin'))
+            db.execute('INSERT INTO users(email,name,password,role) VALUES(?,?,?,?) ON CONFLICT(email) DO NOTHING', (email,'Administrator',hash_password(password),'admin'))
 
 def hash_password(password):
     salt = secrets.token_hex(16)
@@ -153,7 +137,7 @@ def rate_limit(request, db, email):
     key = f'{request.client.host}:{email.lower()}'
     now = time.time()
     db.execute('DELETE FROM attempts WHERE created<?',(now-900,))
-    if db.execute('SELECT COUNT(*) FROM attempts WHERE key=?',(key,)).fetchone()[0] >= 10:
+    if db.execute('SELECT COUNT(*) AS total FROM attempts WHERE key=?',(key,)).fetchone()['total'] >= 10:
         raise HTTPException(429,'Too many attempts. Try again in 15 minutes.')
     db.execute('INSERT INTO attempts VALUES(?,?)',(key,now))
     db.commit()
@@ -220,8 +204,8 @@ def assess(body: Profile, request: Request):
         if not policies:
             raise HTTPException(409,'No verified scholarships have been published yet. An administrator must publish official policies first.')
         results = evaluate(body,policies)
-        cur = db.execute('INSERT INTO assessments(user_id,profile,results) VALUES(?,?,?)',(user['id'],body.model_dump_json(),json.dumps(results)))
-        return {'id':cur.lastrowid,'profile':body.model_dump(),'results':results}
+        cur = db.execute('INSERT INTO assessments(user_id,profile,results) VALUES(?,?,?) RETURNING id',(user['id'],body.model_dump_json(),json.dumps(results)))
+        return {'id':cur.fetchone()['id'],'profile':body.model_dump(),'results':results}
 
 @app.get('/api/assessments')
 def history(request: Request):
@@ -245,6 +229,7 @@ def update_policy(policy_id: int,body: Scholarship,request: Request):
     with database() as db:
         user = current_user(request,db,admin=True)
         fields = body.model_dump()
+        fields['active'] = int(fields['active'])
         cur = db.execute('UPDATE scholarships SET '+','.join(f'{key}=?' for key in fields)+', version=version+1 WHERE id=?',(*fields.values(),policy_id))
         if not cur.rowcount:
             raise HTTPException(404,'Scholarship not found')
@@ -258,9 +243,11 @@ def create_policy(body: Scholarship,request: Request):
     with database() as db:
         user = current_user(request,db,admin=True)
         fields = body.model_dump()
-        cur = db.execute('INSERT INTO scholarships('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',tuple(fields.values()))
-        db.execute('INSERT INTO audit(user_id,action,details) VALUES(?,?,?)',(user['id'],'create_policy',json.dumps({'id':cur.lastrowid,**fields})))
-        return {'id':cur.lastrowid}
+        fields['active'] = int(fields['active'])
+        cur = db.execute('INSERT INTO scholarships('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+') RETURNING id',tuple(fields.values()))
+        policy_id = cur.fetchone()['id']
+        db.execute('INSERT INTO audit(user_id,action,details) VALUES(?,?,?)',(user['id'],'create_policy',json.dumps({'id':policy_id,**fields})))
+        return {'id':policy_id}
 
 @app.get('/api/admin/audit')
 def audit(request: Request):

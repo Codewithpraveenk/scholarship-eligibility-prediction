@@ -1,6 +1,6 @@
 # ScholarPath
 
-A complete account-based scholarship screening application with a FastAPI backend, responsive web interface, persistent SQLite storage, administrator policy management, saved assessments, JSON exports, and a policy audit trail.
+A complete account-based scholarship screening application with a FastAPI backend, responsive web interface, PostgreSQL production storage (SQLite locally), administrator policy management, saved assessments, JSON exports, and a policy audit trail.
 
 ## What eligibility means
 
@@ -31,15 +31,18 @@ The suite starts an isolated real HTTP server and database. It checks registrati
 
 ## Production deployment
 
-The repository includes a Docker image definition and a **Render Blueprint** (`render.yaml`) using a persistent disk. In Render, create a Blueprint from this GitHub repository. Review the paid Starter service/disk cost in Render before deploying. Set:
+The repository includes a Docker image definition and a **Render Free Blueprint** (`render.yaml`). Use an external **Neon Free PostgreSQL** database so accounts and assessments survive Render restarts. No paid disk or paid service is configured. Create a free Neon project, copy its pooled PostgreSQL connection string into Render's secret environment settings, and create the Render Blueprint from this GitHub repository. Set:
 
 - `APP_ORIGIN`: the exact public HTTPS origin without a trailing slash (e.g. `https://your-service.onrender.com`).
+- `DATABASE_URL`: the Neon pooled PostgreSQL connection string. Treat it as a password; never commit it or paste it in chat.
 - `ADMIN_EMAIL`: the initial administrator email.
 - `ADMIN_PASSWORD`: a unique secret of at least 12 characters.
 
-The blueprint sets `APP_ENV=production` (Secure cookies, HSTS, no interactive API docs) and stores the database under `/data`. Run one application instance with this SQLite deployment. Use a PostgreSQL migration before horizontal scaling. Do not use ephemeral hosting for SQLite. TLS must terminate at the trusted hosting proxy; the supplied container trusts forwarded headers and should not be exposed directly without that proxy. The health endpoint is `/health`.
+The blueprint sets `APP_ENV=production` (Secure cookies, HSTS, no interactive API docs). Production refuses to start without `DATABASE_URL`, preventing accidental use of ephemeral SQLite. PostgreSQL connections require TLS in production. SQLite remains available for local development; existing local data is not automatically migrated. TLS must terminate at the trusted hosting proxy; the supplied container trusts forwarded headers and should not be exposed directly without that proxy. The health endpoint is `/health`.
 
-GitHub CI runs the integration suite on pushes and pull requests. Connect Render auto-deploy to the protected main branch after requiring CI to pass. A configuration file is not evidence of a live deployment: obtain and verify the host's deployed URL before announcing production availability.
+Free-plan limits apply: Render sleeps after inactivity and has shared monthly usage quotas, so cold starts can delay requests. Neon also scales down when idle and has storage/compute quotas. Do not enable paid upgrades or billing automatically. Free hosting does not provide an always-on production SLA. Check current limits at https://render.com/docs/free and https://neon.com/pricing.
+
+GitHub CI runs the integration suite on both SQLite and a disposable PostgreSQL service on pushes and pull requests. `TEST_DATABASE_URL` must point only to an empty disposable test database, never the production database. Connect Render auto-deploy to the protected main branch after requiring CI to pass. A public repository URL can be used for manual deployment without granting repository access. A configuration file is not evidence of a live deployment: obtain and verify the host's deployed URL before announcing production availability.
 
 ## Operations and limits
 
@@ -47,12 +50,14 @@ GitHub CI runs the integration suite on pushes and pull requests. Connect Render
 - Authentication attempts are limited to 10 per email/IP pair per 15 minutes in the database. Add edge-level IP throttling for public traffic and enforce request size/time limits at the reverse proxy.
 - No external scripts, fonts, analytics, or frontend dependencies; a same-origin Content Security Policy is applied. SQL values are parameterized and browser-rendered text is escaped.
 - Only the signed-in owner can read or delete their assessments. Published policy changes are versioned and audited. Audit records contain policy data, not student passwords.
-- Back up SQLite using its online backup API or a managed disk snapshot (not by copying a live database file alone). Encrypt backups, restrict access and test restoration. Set retention and privacy policies before collecting real student financial data.
+- Back up production PostgreSQL with `pg_dump` or provider-supported backups and test restoration. For local SQLite, use its online backup API rather than copying a live database file alone. Encrypt backups and restrict access. Set retention and privacy policies before collecting real student financial data.
 - There is no email delivery/recovery, document upload/verification, payment, provider application submission, or ML training pipeline. Official rules and operational monitoring must be supplied before a public student launch.
 
 ## Structure
 
-`app/main.py` — API, authentication, database, eligibility engine.
+`app/main.py` — API, authentication, eligibility engine.
+
+`app/database.py` — PostgreSQL/SQLite connection and transaction handling.
 
 `app/static/` — accessible responsive student/admin interface.
 
