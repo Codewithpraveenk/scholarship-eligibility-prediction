@@ -17,6 +17,8 @@ from app.database import database
 
 ROOT = Path(__file__).resolve().parent
 PROD = os.environ.get('APP_ENV') == 'production'
+if not os.environ.get('APP_ORIGIN') and os.environ.get('RENDER_EXTERNAL_URL'):
+    os.environ['APP_ORIGIN'] = os.environ['RENDER_EXTERNAL_URL'].rstrip('/')
 if PROD and not os.environ.get('APP_ORIGIN', '').startswith('https://'):
     raise RuntimeError('Production requires APP_ORIGIN set to the public HTTPS origin')
 logger = logging.getLogger('scholarpath')

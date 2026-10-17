@@ -33,7 +33,7 @@ The suite starts an isolated real HTTP server and database. It checks registrati
 
 The repository includes a Docker image definition and a **Render Free Blueprint** (`render.yaml`). Use an external **Neon Free PostgreSQL** database so accounts and assessments survive Render restarts. No paid disk or paid service is configured. Create a free Neon project, copy its pooled PostgreSQL connection string into Render's secret environment settings, and create the Render Blueprint from this GitHub repository. Set:
 
-- `APP_ORIGIN`: the exact public HTTPS origin without a trailing slash (e.g. `https://your-service.onrender.com`).
+- `APP_ORIGIN`: optional on Render; the app uses Render's `RENDER_EXTERNAL_URL` automatically. For another host or a custom domain, set the exact public HTTPS origin without a trailing slash.
 - `DATABASE_URL`: the Neon pooled PostgreSQL connection string. Treat it as a password; never commit it or paste it in chat.
 - `ADMIN_EMAIL`: the initial administrator email.
 - `ADMIN_PASSWORD`: a unique secret of at least 12 characters.
